@@ -75,7 +75,6 @@ def validate_2fa(code):
 
 if __name__ == "__main__":
     LOGIN_URL = "https://www.noip.com/login?ref_url=console"
-    # THAY ĐỔI: Cập nhật URL quản lý host
     HOST_URL = "https://my.noip.com/dns/records"
     LOGOUT_URL = "https://my.noip.com/logout"
 
@@ -90,92 +89,85 @@ if __name__ == "__main__":
     # Cân nhắc thay đổi đường dẫn geckodriver nếu cần
     service = Service(executable_path="/usr/local/bin/geckodriver")
     browser = webdriver.Firefox(options=browser_options, service=service)
+    
+    try:
+        print(f'Sử dụng user agent: "{browser.execute_script("return navigator.userAgent;")}"')
+        print("Mở trình duyệt...")
+        browser.get(LOGIN_URL)
 
-    print(f'Sử dụng user agent: "{browser.execute_script("return navigator.userAgent;")}"')
-    print("Mở trình duyệt...")
-    browser.get(LOGIN_URL)
-
-    if "login" in browser.current_url:
-        try:
-            username_input = WebDriverWait(browser, 20).until(
-                expected_conditions.visibility_of_element_located((By.ID, "username"))
-            )
-            password_input = browser.find_element(by=By.ID, value="password")
-            login_button = browser.find_element(By.ID, "clogs-captcha-button")
-
-            username_input.send_keys(email)
-            password_input.send_keys(password)
-            login_button.click()
-            print("Đã gửi thông tin đăng nhập.")
-        except TimeoutException:
-            exit_with_error("Không tìm thấy form đăng nhập. Trang web có thể đã thay đổi.")
-
-        # Chờ chuyển trang sau khi login
-        sleep(5)
-
-        # Xử lý 2FA
-        if "2fa" in browser.current_url:
-            print("Phát hiện trang xác thực 2 yếu tố (2FA).")
+        if "login" in browser.current_url:
             try:
-                # Chờ một trong hai loại form 2FA xuất hiện
-                WebDriverWait(browser, 20).until(
-                    expected_conditions.any_of(
-                        expected_conditions.visibility_of_element_located((By.ID, "otp-input")),
-                        expected_conditions.visibility_of_element_located((By.ID, "challenge_code"))
-                    )
+                username_input = WebDriverWait(browser, 20).until(
+                    expected_conditions.visibility_of_element_located((By.ID, "username"))
                 )
+                password_input = browser.find_element(by=By.ID, value="password")
+                login_button = browser.find_element(By.ID, "clogs-captcha-button")
 
-                # Kiểm tra xem là 2FA qua email hay app
-                try:
-                    code_form = browser.find_element(by=By.ID, value="otp-input")
-                    # Email OTP
-                    otp_code = input("Nhập mã OTP 6 số từ email: ")
-                    if validate_otp(otp_code):
-                        code_inputs = code_form.find_elements(by=By.TAG_NAME, value="input")
-                        for i, char in enumerate(otp_code):
-                            code_inputs[i].send_keys(char)
-
-                except NoSuchElementException:
-                    # App TOTP
-                    code_form = browser.find_element(by=By.ID, value="challenge_code")
-                    totp_secret = os.getenv("NO_IP_TOTP_KEY", "")
-                    if not totp_secret:
-                        totp_secret = input("Nhập khóa 2FA (16 ký tự): ")
-                    if validate_2fa(totp_secret):
-                        totp = pyotp.TOTP(totp_secret)
-                        ActionChains(browser).move_to_element(code_form).click().send_keys(totp.now()).perform()
-                
-                # Nút submit chung cho cả hai form
-                browser.find_element(By.NAME, "submit").click()
-                print("Đã gửi mã 2FA.")
-
+                username_input.send_keys(email)
+                password_input.send_keys(password)
+                login_button.click()
+                print("Đã gửi thông tin đăng nhập.")
             except TimeoutException:
-                exit_with_error("Không thể tải trang 2FA hoặc không tìm thấy ô nhập mã.")
+                exit_with_error("Không tìm thấy form đăng nhập. Trang web có thể đã thay đổi.")
 
-        # Chờ đến khi vào được dashboard
-        try:
-            WebDriverWait(browser, 60).until(
-                expected_conditions.visibility_of_element_located((By.ID, "content-wrapper"))
-            )
-            print("Đăng nhập thành công.")
-        except TimeoutException:
-            exit_with_error("Đăng nhập thất bại. Kiểm tra lại thông tin hoặc tài khoản có thể bị khóa.")
-        
-        # Đi đến trang quản lý host
-        print(f"Điều hướng đến trang quản lý host: {HOST_URL}")
-        browser.get(HOST_URL)
+            # Chờ chuyển trang sau khi login
+            sleep(5)
 
-        # THAY ĐỔI: Chờ cho container của các host được tải
-        try:
-            WebDriverWait(browser, 60).until(
-                expected_conditions.visibility_of_element_located((By.ID, "zone-collection-wrapper"))
-            )
-            print("Trang quản lý host đã tải xong.")
-        except TimeoutException:
-            exit_with_error("Không thể tải trang quản lý host của No-IP.")
-        
-        # Bắt đầu xác nhận host
-        try:
+            # Xử lý 2FA
+            if "2fa" in browser.current_url:
+                print("Phát hiện trang xác thực 2 yếu tố (2FA).")
+                try:
+                    WebDriverWait(browser, 20).until(
+                        expected_conditions.any_of(
+                            expected_conditions.visibility_of_element_located((By.ID, "otp-input")),
+                            expected_conditions.visibility_of_element_located((By.ID, "challenge_code"))
+                        )
+                    )
+                    try:
+                        code_form = browser.find_element(by=By.ID, value="otp-input")
+                        otp_code = input("Nhập mã OTP 6 số từ email: ")
+                        if validate_otp(otp_code):
+                            code_inputs = code_form.find_elements(by=By.TAG_NAME, value="input")
+                            for i, char in enumerate(otp_code):
+                                code_inputs[i].send_keys(char)
+                    except NoSuchElementException:
+                        code_form = browser.find_element(by=By.ID, value="challenge_code")
+                        totp_secret = os.getenv("NO_IP_TOTP_KEY", "")
+                        if not totp_secret:
+                            totp_secret = input("Nhập khóa 2FA (16 ký tự): ")
+                        if validate_2fa(totp_secret):
+                            totp = pyotp.TOTP(totp_secret)
+                            ActionChains(browser).move_to_element(code_form).click().send_keys(totp.now()).perform()
+                    
+                    browser.find_element(By.NAME, "submit").click()
+                    print("Đã gửi mã 2FA.")
+
+                except TimeoutException:
+                    exit_with_error("Không thể tải trang 2FA hoặc không tìm thấy ô nhập mã.")
+
+            # Chờ đến khi vào được dashboard
+            try:
+                WebDriverWait(browser, 60).until(
+                    expected_conditions.visibility_of_element_located((By.ID, "content-wrapper"))
+                )
+                print("Đăng nhập thành công.")
+            except TimeoutException:
+                exit_with_error("Đăng nhập thất bại. Kiểm tra lại thông tin hoặc tài khoản có thể bị khóa.")
+            
+            # Đi đến trang quản lý host
+            print(f"Điều hướng đến trang quản lý host: {HOST_URL}")
+            browser.get(HOST_URL)
+
+            # Chờ cho container của các host được tải
+            try:
+                WebDriverWait(browser, 60).until(
+                    expected_conditions.visibility_of_element_located((By.ID, "zone-collection-wrapper"))
+                )
+                print("Trang quản lý host đã tải xong.")
+            except TimeoutException:
+                exit_with_error("Không thể tải trang quản lý host của No-IP.")
+            
+            # Bắt đầu xác nhận host
             hosts = get_hosts()
             if not hosts:
                 print("Không tìm thấy host nào trong tài khoản.")
@@ -184,37 +176,22 @@ if __name__ == "__main__":
             
             confirmed_hosts = 0
             for host in hosts:
-                # THAY ĐỔI: Lấy thông tin host từ data attributes
                 hostname = host.get_attribute("data-name")
                 zone = host.get_attribute("data-zone")
                 full_hostname = f"{hostname}.{zone}"
                 
                 print(f'Kiểm tra host "{full_hostname}"...')
-
                 try:
-                    # !!! QUAN TRỌNG !!!
-                    # Giao diện mới không có nút "Confirm" rõ ràng. 
-                    # Bạn cần kiểm tra một host sắp hết hạn để tìm ra selector (bộ chọn) đúng.
-                    # Nó có thể là một button, một thẻ <a> với text là "Confirm", "Renew", "Verify"
-                    # hoặc có một class đặc biệt như "btn-warning", "text-danger".
-                    #
-                    # Dưới đây là một vài ví dụ bạn có thể thử thay thế:
-                    # button = host.find_element(By.LINK_TEXT, "Confirm")
-                    # button = host.find_element(By.CSS_SELECTOR, ".btn.btn-warning")
-                    # button = host.find_element(By.XPATH, ".//a[contains(text(), 'Confirm')]")
-                    
-                    # Tạm thời, ta tìm kiếm bất kỳ button hoặc link nào có chữ "Confirm"
                     button = host.find_element(By.XPATH, ".//*[self::a or self::button][contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]")
                     
                     print(f'---> Tìm thấy nút xác nhận cho host "{full_hostname}". Đang nhấp...')
-                    button.click()
+                    # Sử dụng JavaScript click để tăng độ ổn định
+                    browser.execute_script("arguments[0].click();", button)
                     confirmed_hosts += 1
                     print(f'---> Host "{full_hostname}" đã được xác nhận.')
-                    # Chờ một chút để trang xử lý, tránh lỗi
                     sleep(3)
                 
                 except NoSuchElementException:
-                    # Không tìm thấy nút confirm, nghĩa là host này không cần xác nhận
                     print(f'Host "{full_hostname}" không cần xác nhận.')
                     continue
 
@@ -225,13 +202,12 @@ if __name__ == "__main__":
                 print("Không có host nào cần xác nhận lần này.")
             print("Hoàn tất.")
 
-        except Exception as e:
-            print(f"Đã xảy ra lỗi trong quá trình xác nhận: {e}")
+        else:
+            print("Không thể truy cập trang đăng nhập: " + LOGIN_URL)
 
-    else:
-        print("Không thể truy cập trang đăng nhập: " + LOGIN_URL)
+    except Exception as e:
+        print(f"Đã xảy ra một lỗi không mong muốn: {e}")
 
-    # Đăng xuất và đóng trình duyệt
     finally:
         print("Đăng xuất...")
         browser.get(LOGOUT_URL)
