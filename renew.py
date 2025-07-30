@@ -76,7 +76,6 @@ def validate_2fa(code):
 
 if __name__ == "__main__":
     LOGIN_URL = "https://www.noip.com/login?ref_url=console"
-    # THAY ĐỔI: Cập nhật URL quản lý host
     HOST_URL = "https://my.noip.com/dns/records"
     LOGOUT_URL = "https://my.noip.com/logout"
 
@@ -87,19 +86,21 @@ if __name__ == "__main__":
     profile.set_preference("general.useragent.override", get_user_agent())
     browser_options = webdriver.FirefoxOptions()
     browser_options.add_argument("--headless")
+    # THÊM TÙY CHỌN: Đặt kích thước cửa sổ để tránh lỗi phần tử không hiển thị
+    browser_options.add_argument("--width=1920")
+    browser_options.add_argument("--height=1080")
     browser_options.profile = profile
     service = Service(executable_path="/usr/local/bin/geckodriver")
     browser = webdriver.Firefox(options=browser_options, service=service)
 
-    # Open browser
-    print(f'Using user agent "{browser.execute_script("return navigator.userAgent;")}"')
-    print("Opening browser")
+    try:
+        print(f'Using user agent "{browser.execute_script("return navigator.userAgent;")}"')
+        print("Opening browser")
 
-    # Go to login page
-    browser.get(LOGIN_URL)
+        # Go to login page
+        browser.get(LOGIN_URL)
 
-    if "login" in browser.current_url:
-        try:
+        if "login" in browser.current_url:
             # Find and fill login form
             username_input = WebDriverWait(browser, 20).until(
                 expected_conditions.visibility_of_element_located((By.ID, "username"))
@@ -111,7 +112,6 @@ if __name__ == "__main__":
             password_input.send_keys(password)
             login_button.click()
             
-            # Wait for post-login action (dashboard or 2fa page)
             WebDriverWait(browser, 60).until(
                 expected_conditions.any_of(
                     expected_conditions.url_contains("my.noip.com"),
@@ -122,15 +122,13 @@ if __name__ == "__main__":
             # Check if login has 2FA enabled and handle it
             if "2fa" in browser.current_url:
                 print("2FA required...")
-                # Wait for submit button to ensure page is loaded
                 WebDriverWait(driver=browser, timeout=60).until(
                     expected_conditions.element_to_be_clickable((By.NAME, "submit"))
                 )
                 
-                # Find if account has 2FA enabled or if is relying on email verification code
                 try:
-                    code_form = browser.find_element(by=By.ID, value="otp-input")
                     # Account has email verification code
+                    code_form = browser.find_element(by=By.ID, value="otp-input")
                     otp_code = str(input("Enter OTP code: ")).replace("\n", "")
                     if validate_otp(otp_code):
                         code_inputs = code_form.find_elements(by=By.TAG_NAME, value="input")
@@ -144,7 +142,9 @@ if __name__ == "__main__":
                         totp_secret = str(input("Enter 2FA key: ")).replace("\n", "")
                     if validate_2fa(totp_secret):
                         totp = pyotp.TOTP(totp_secret)
-                        ActionChains(browser).move_to_element(code_form).click().send_keys(totp.now()).perform()
+                        code = totp.now()
+                        # THAY ĐỔI: Sử dụng JavaScript để điền mã 2FA một cách an toàn
+                        browser.execute_script("arguments[0].value = arguments[1];", code_form, code)
                 
                 # Click submit button
                 browser.find_element(By.NAME, "submit").click()
@@ -158,61 +158,43 @@ if __name__ == "__main__":
             # Go to hostnames page
             browser.get(HOST_URL)
 
-            # THAY ĐỔI: Chờ trang host mới tải xong
-            try:
-                WebDriverWait(driver=browser, timeout=60).until(
-                    expected_conditions.visibility_of_element_located((By.ID, "zone-collection-wrapper"))
-                )
-            except TimeoutException:
-                exit_with_error("Could not load NO-IP hostnames page.")
-
+            # Wait for the new host page to load
+            WebDriverWait(driver=browser, timeout=60).until(
+                expected_conditions.visibility_of_element_located((By.ID, "zone-collection-wrapper"))
+            )
+            
             # Confirm hosts
-            try:
-                hosts = get_hosts()
-                print("Confirming hosts phase")
-                confirmed_hosts = 0
+            hosts = get_hosts()
+            print("Confirming hosts phase")
+            confirmed_hosts = 0
 
-                for host in hosts:
-                    # THAY ĐỔI: Lấy tên host từ data attributes và tìm button
-                    hostname = host.get_attribute("data-name")
-                    zone = host.get_attribute("data-zone")
-                    current_host = f"{hostname}.{zone}"
+            for host in hosts:
+                hostname = host.get_attribute("data-name")
+                zone = host.get_attribute("data-zone")
+                current_host = f"{hostname}.{zone}"
 
-                    print(f'Checking if host "{current_host}" needs confirmation')
-                    try:
-                        # Logic tìm button dựa trên text "Confirm". Bạn có thể cần chỉnh lại nếu No-IP dùng từ khác.
-                        button = host.find_element(By.XPATH, ".//*[self::a or self::button][contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]")
-                        
-                        # Giữ lại logic kiểm tra text gốc của bạn
-                        if "confirm" in button.text.lower() or "confirm" in translate(button.text).lower():
-                            print(f'--> Found confirm button for "{current_host}". Clicking...')
-                            # Dùng JS click để tăng độ ổn định
-                            browser.execute_script("arguments[0].click();", button)
-                            confirmed_hosts += 1
-                            print(f'--> Host "{current_host}" confirmed')
-                            sleep(3) # Chờ một chút để tránh request quá nhanh
-                    except NoSuchElementException:
-                        # Nếu không tìm thấy button, bỏ qua host này
-                        continue
-                
-                if confirmed_hosts == 1:
-                    print("1 host confirmed")
-                else:
-                    print(f"{confirmed_hosts} hosts confirmed")
-                
-                print("Finished")
-            except Exception as e:
-                print("Error during confirmation phase: ", e)
-
-        except Exception as e:
-            exit_with_error(f"An error occurred during login/2FA: {e}")
-
-        # Log off
-        finally:
-            print("Logging off\n\n")
-            browser.get(LOGOUT_URL)
-            sleep(2)
-    else:
-        print("Cannot access login page:\t" + LOGIN_URL)
-
-    browser.quit()
+                print(f'Checking if host "{current_host}" needs confirmation')
+                try:
+                    button = host.find_element(By.XPATH, ".//*[self::a or self::button][contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]")
+                    
+                    if "confirm" in button.text.lower() or "confirm" in translate(button.text).lower():
+                        print(f'--> Found confirm button for "{current_host}". Clicking...')
+                        browser.execute_script("arguments[0].click();", button)
+                        confirmed_hosts += 1
+                        print(f'--> Host "{current_host}" confirmed')
+                        sleep(3)
+                except NoSuchElementException:
+                    continue
+            
+            if confirmed_hosts == 1:
+                print("1 host confirmed")
+            else:
+                print(f"{confirmed_hosts} hosts confirmed")
+            
+            print("Finished")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        print("Logging off and quitting browser...\n\n")
+        if 'browser' in locals() and browser.service.is_connectable():
+            browser.quit()
