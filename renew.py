@@ -17,10 +17,11 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
 
 
-# THAY ĐỔI: Logic get_hosts được viết lại để phù hợp với HTML mới
 def get_hosts():
-    """Lấy danh sách các thẻ div, mỗi div đại diện cho một host."""
-    return browser.find_elements(by=By.CLASS_NAME, value="zone-record")
+    return (
+        browser.find_element(by=By.CLASS_NAME, value="zone-container")
+        .find_elements(by=By.CLASS_NAME, value="flex-row")
+    )
 
 
 def translate(text):
@@ -30,15 +31,13 @@ def translate(text):
 
 
 def get_user_agent():
-    try:
-        r = requests.get(url="https://jnrbsn.github.io/user-agents/user-agents.json")
-        r.close()
-        if r.status_code == 200 and len(list(r.json())) > 0:
-            agents = r.json()
-            return list(agents).pop(random.randint(0, len(agents) - 1))
-    except Exception:
-        pass
-    return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36"
+    r = requests.get(url="https://jnrbsn.github.io/user-agents/user-agents.json")
+    r.close()
+    if r.status_code == 200 and len(list(r.json())) > 0:
+        agents = r.json()
+        return list(agents).pop(random.randint(0, len(agents) - 1))
+    else:
+        return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36"
 
 
 def exit_with_error(message):
@@ -48,6 +47,19 @@ def exit_with_error(message):
 
 
 def get_credentials():
+    """
+    Retrieves the credentials required for authentication.
+
+    Returns:
+        - email (str): The email address associated with the credentials.
+        - password (str): The password associated with the credentials.
+
+    Notes:
+        - The function first checks if the email and password are already set as environment variables.
+        - If the email or password is not set, it checks if the command line arguments were passed.
+        - If the email or password is still not set, it prompts the user to enter the values interactively.
+    """
+
     email = os.getenv("NO_IP_USERNAME", "")
     password = os.getenv("NO_IP_PASSWORD", "")
 
@@ -63,21 +75,35 @@ def get_credentials():
 
 
 def validate_otp(code):
-    if len(code) != 6 or not code.isnumeric():
-        exit_with_error("Mã OTP không hợp lệ. Phải là 6 chữ số.")
-    return True
+    valid = True
+
+    if len(code) != 6:
+        exit_with_error(
+            message="Invalid email verification code. The code must have 6 digits. Exiting."
+        )
+        valid = False
+    if otp_code.isnumeric() is False:
+        exit_with_error("Email verification code must be numeric. Exiting.")
+        valid = False
+
+    return valid
 
 
 def validate_2fa(code):
-    if len(code) != 16 or not code.isalnum():
-        exit_with_error("Khóa 2FA không hợp lệ. Phải là 16 ký tự chữ và số.")
+    if len(code) != 16 or code.isalnum() is False:
+        exit_with_error(
+            message="Invalid 2FA key. Key must have 16 alphanumeric characters. Exiting."
+        )
+        return False
     return True
 
 
 if __name__ == "__main__":
     LOGIN_URL = "https://www.noip.com/login?ref_url=console"
-    HOST_URL = "https://my.noip.com/dns/records"
+    HOST_URL = "https://my.noip.com/dynamic-dns"
     LOGOUT_URL = "https://my.noip.com/logout"
+
+    HOSTNAME_PREFIX = "expiration-banner-hostname-"
 
     email, password = get_credentials()
 
@@ -86,115 +112,186 @@ if __name__ == "__main__":
     profile.set_preference("general.useragent.override", get_user_agent())
     browser_options = webdriver.FirefoxOptions()
     browser_options.add_argument("--headless")
-    # THÊM TÙY CHỌN: Đặt kích thước cửa sổ để tránh lỗi phần tử không hiển thị
-    browser_options.add_argument("--width=1920")
-    browser_options.add_argument("--height=1080")
     browser_options.profile = profile
-    service = Service(executable_path="/usr/local/bin/geckodriver")
+    service = Service(
+        executable_path="/usr/local/bin/geckodriver", log_output="/dev/null"
+    )
     browser = webdriver.Firefox(options=browser_options, service=service)
 
-    try:
-        print(f'Using user agent "{browser.execute_script("return navigator.userAgent;")}"')
-        print("Opening browser")
+    # Open browser
+    print(
+        'Using user agent "'
+        + browser.execute_script("return navigator.userAgent;")
+        + '"'
+    )
+    print("Opening browser")
 
-        # Go to login page
-        browser.get(LOGIN_URL)
+    # Go to login page
+    browser.get(LOGIN_URL)
 
-        if "login" in browser.current_url:
-            # Find and fill login form
-            username_input = WebDriverWait(browser, 20).until(
-                expected_conditions.visibility_of_element_located((By.ID, "username"))
+    if browser.current_url == LOGIN_URL:
+
+        # Find and fill login form
+        try:
+            username_input = WebDriverWait(browser, 10).until(
+                lambda browser: browser.find_element(by=By.ID, value="username")
             )
-            password_input = browser.find_element(by=By.ID, value="password")
-            login_button = browser.find_element(By.ID, "clogs-captcha-button")
-            
-            username_input.send_keys(email)
-            password_input.send_keys(password)
-            login_button.click()
-            
-            WebDriverWait(browser, 60).until(
-                expected_conditions.any_of(
-                    expected_conditions.url_contains("my.noip.com"),
-                    expected_conditions.url_contains("2fa")
+        except TimeoutException:
+            exit_with_error(
+                message="Username input not found within the specified timeout."
+            )
+
+        try:
+            password_input = WebDriverWait(browser, 10).until(
+                lambda browser: browser.find_element(by=By.ID, value="password")
+            )
+        except TimeoutException:
+            exit_with_error(
+                message="Password input not found within the specified timeout."
+            )
+
+        username_input.send_keys(email)
+        password_input.send_keys(password)
+
+        # Find and click login button
+        try:
+            WebDriverWait(driver=browser, timeout=60, poll_frequency=3).until(
+                expected_conditions.visibility_of_element_located(
+                    (By.ID, "clogs-captcha-button")
                 )
             )
+            login_button = browser.find_element(By.ID, "clogs-captcha-button")
+            login_button.click()
+        except TimeoutException:
+            exit_with_error(
+                message="Login button not found within the specified timeout."
+            )
 
-            # Check if login has 2FA enabled and handle it
-            if "2fa" in browser.current_url:
-                print("2FA required...")
-                WebDriverWait(driver=browser, timeout=60).until(
+        # Wait for login to complete
+        try:
+            WebDriverWait(driver=browser, timeout=60, poll_frequency=3).until(
+                expected_conditions.visibility_of_any_elements_located(
+                    (By.CLASS_NAME, "nav-link")
+                )
+            )
+        except TimeoutException:
+            exit_with_error(message="Could not do post login action. Exiting.")
+
+        # Check if login has 2FA enabled and handle it
+        if browser.current_url.find("2fa") > -1:
+
+            # Wait for submit button to ensure page is loaded
+            try:
+                WebDriverWait(driver=browser, timeout=60, poll_frequency=3).until(
                     expected_conditions.element_to_be_clickable((By.NAME, "submit"))
                 )
-                
+                submit_button = browser.find_elements(By.NAME, "submit")
+                if len(submit_button) < 1:
+                    exit_with_error(message="2FA submit button not found. Exiting.")
+            except TimeoutException:
+                exit_with_error(
+                    message="2FA page did not load within the specified timeout. Exiting."
+                )
+            except NoSuchElementException:
+                exit_with_error(message="2FA submit button not found. Exiting.")
+
+            # Find if account has 2FA enabled or if is relying on email verification code
+            CODE_METHOD = None
+            try:
+                code_form = browser.find_element(by=By.ID, value="otp-input")
+                CODE_METHOD = "email"
+            except NoSuchElementException:
                 try:
-                    # Account has email verification code
-                    code_form = browser.find_element(by=By.ID, value="otp-input")
-                    otp_code = str(input("Enter OTP code: ")).replace("\n", "")
-                    if validate_otp(otp_code):
-                        code_inputs = code_form.find_elements(by=By.TAG_NAME, value="input")
+                    code_form = browser.find_element(by=By.ID, value="challenge_code")
+                    CODE_METHOD = "app"
+                except NoSuchElementException:
+                    exit_with_error(message="2FA/Email code input not found. Exiting.")
+
+            # Account has email verification code
+            if CODE_METHOD == "email":
+                otp_code = str(input("Enter OTP code: ")).replace("\n", "")
+                if validate_otp(otp_code):
+                    code_inputs = code_form.find_elements(by=By.TAG_NAME, value="input")
+                    if len(code_inputs) == 6:
                         for i in range(len(code_inputs)):
                             code_inputs[i].send_keys(otp_code[i])
-                except NoSuchElementException:
-                    # Account has 2FA code
-                    code_form = browser.find_element(by=By.ID, value="challenge_code")
-                    totp_secret = os.getenv("NO_IP_TOTP_KEY", "")
-                    if len(totp_secret) == 0:
-                        totp_secret = str(input("Enter 2FA key: ")).replace("\n", "")
-                    if validate_2fa(totp_secret):
-                        totp = pyotp.TOTP(totp_secret)
-                        code = totp.now()
-                        # THAY ĐỔI: Sử dụng JavaScript để điền mã 2FA một cách an toàn
-                        browser.execute_script("arguments[0].value = arguments[1];", code_form, code)
-                
-                # Click submit button
-                browser.find_element(By.NAME, "submit").click()
+                    else:
+                        exit_with_error(message="Email code input not found. Exiting.")
 
-            # Wait for account dashboard to load
-            WebDriverWait(driver=browser, timeout=120).until(
-                expected_conditions.visibility_of_element_located((By.ID, "content-wrapper"))
+            # Account has 2FA code
+            elif CODE_METHOD == "app":
+                totp_secret = os.getenv("NO_IP_TOTP_KEY", "")
+                if len(totp_secret) == 0:
+                    totp_secret = str(input("Enter 2FA key: ")).replace("\n", "")
+                if validate_2fa(totp_secret):
+                    totp = pyotp.TOTP(totp_secret)
+                    browser.execute_script("arguments[0].focus();", code_form)
+                    ActionChains(browser).send_keys(totp.now()).perform()
+
+            # Click submit button
+            submit_button[0].click()
+
+        # Wait for account dashboard to load
+        try:
+            WebDriverWait(driver=browser, timeout=120, poll_frequency=3).until(
+                expected_conditions.visibility_of_element_located(
+                    (By.ID, "content-wrapper")
+                )
             )
             print("Login successful")
+        except TimeoutException:
+            exit_with_error(message="Could not login. Check if account is blocked.")
+        except NoSuchElementException:
+            exit_with_error(message="Could not find element dashboard menu. Exiting.")
 
-            # Go to hostnames page
-            browser.get(HOST_URL)
+        # Go to hostnames page
+        browser.get(HOST_URL)
 
-            # Wait for the new host page to load
-            WebDriverWait(driver=browser, timeout=60).until(
-                expected_conditions.visibility_of_element_located((By.ID, "zone-collection-wrapper"))
+        # Wait for hostnames page to load
+        try:
+            WebDriverWait(driver=browser, timeout=60, poll_frequency=3).until(
+                expected_conditions.visibility_of(
+                    browser.find_element(by=By.CLASS_NAME, value="zone-container")
+                )
             )
-            
-            # Confirm hosts
+        except TimeoutException:
+            exit_with_error(message="Could not load NO-IP hostnames page.")
+
+        # Confirm hosts
+        try:
             hosts = get_hosts()
             print("Confirming hosts phase")
             confirmed_hosts = 0
 
             for host in hosts:
-                hostname = host.get_attribute("data-name")
-                zone = host.get_attribute("data-zone")
-                current_host = f"{hostname}.{zone}"
+                if HOSTNAME_PREFIX in host.get_attribute('id'):
+                    current_host = host.get_attribute('id')[28]
+                    print('Host "' + current_host + '" needs confirmation')
+                    try:
+                        button = host.find_element(by=By.TAG_NAME, value="button")
+                    except NoSuchElementException as e:
+                        break
 
-                print(f'Checking if host "{current_host}" needs confirmation')
-                try:
-                    button = host.find_element(By.XPATH, ".//*[self::a or self::button][contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]")
-                    
-                    if "confirm" in button.text.lower() or "confirm" in translate(button.text).lower():
-                        print(f'--> Found confirm button for "{current_host}". Clicking...')
-                        browser.execute_script("arguments[0].click();", button)
+                    if button.text == "Confirm" or translate(button.text) == "Confirm":
+                        button.click()
                         confirmed_hosts += 1
-                        print(f'--> Host "{current_host}" confirmed')
-                        sleep(3)
-                except NoSuchElementException:
-                    continue
-            
+                        print('Host "' + current_host + '" confirmed')
+                        sleep(5)  # Wait to avoid error "Element XXXX is not clickable at point (x,y) because another element XXXX obscures it"
+
             if confirmed_hosts == 1:
                 print("1 host confirmed")
             else:
-                print(f"{confirmed_hosts} hosts confirmed")
-            
+                print(str(confirmed_hosts) + " hosts confirmed")
+
             print("Finished")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        print("Logging off and quitting browser...\n\n")
-        if 'browser' in locals() and browser.service.is_connectable():
-            browser.quit()
+
+        except Exception as e:
+            print("Error: ", e)
+
+        # Log off
+        finally:
+            print("Logging off\n\n")
+            browser.get(LOGOUT_URL)
+    else:
+        print("Cannot access login page:\t" + LOGIN_URL)
+    browser.quit()
